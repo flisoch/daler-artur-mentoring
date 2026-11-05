@@ -1,0 +1,11 @@
+Measuring 1 push and 1 pop, two threads, no cpu pinning, measurements count: 100000
+Percentiles: {
+    p50: 6689,
+    p90: 8955,
+    p95: 10135,
+    p99: 12180,
+    p99.9: 239373,
+    p99.99: 493836,
+    max: 832559,
+}
+

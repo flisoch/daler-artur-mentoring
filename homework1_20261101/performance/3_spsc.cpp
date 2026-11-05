@@ -6,19 +6,27 @@
 Поиграть с ядрами и узнать, какие ядра на твоей машине имеют наименьшую латенси между друг другом.
 */
 
-// #define MOODYCAMEL_CACHE_LINE_SIZE 128
+/*
+    clang++ 3_spsc.cpp -std=c++20 -O3
+    ./a.out 2 3
+*/
+
 #include <algorithm>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
+#include <exception>
 #include <format>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
+#include <latch>
 #include <ostream>
 #include <readerwriterqueue/readerwriterqueue.h>
+#include <sched.h>
 #include <set>
+#include <stdexcept>
 #include <string>
 #include <thread>
 #include <time.h>
@@ -74,42 +82,96 @@ Percentiles getPercentiles(std::vector<int64_t>& latencies)
 using TValue = timespec;
 using TQueue = moodycamel::ReaderWriterQueue<TValue>;
 
-void producer(TQueue& q)
+constexpr size_t kMeasurementsCount = 100'000;
+
+void pin_this_thread(int cpu)
 {
+    cpu_set_t set;
+    CPU_ZERO(&set);
+    CPU_SET(cpu, &set);
+
+    if (sched_setaffinity(0, sizeof(cpu_set_t), &set) != 0)
+    {
+        throw std::runtime_error("sched_setaffinity failed");
+    }
+}
+
+void producer(TQueue& q, TQueue& ack_q, std::latch& both_pinned, int cpu)
+{
+    pin_this_thread(cpu);
+
+    both_pinned.count_down();
+    both_pinned.wait();
+
     timespec start_time;
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
-    while (!q.try_enqueue(start_time)){};
+
+    for (size_t i = 0; i < kMeasurementsCount; ++i)
+    {
+        clock_gettime(CLOCK_MONOTONIC, &start_time);
+        // ping
+        while (!q.try_enqueue(start_time)){};
+
+        TValue ack;
+        // pong
+        while (!ack_q.try_dequeue(ack)){}
+    }
+
 }
 
-void consumer(TQueue& q, std::vector<int64_t>& latencies)
+void consumer(TQueue& q, TQueue& ack_q, std::vector<int64_t>& latencies, std::latch& both_pinned, int cpu)
 {
+    pin_this_thread(cpu);
+
+    both_pinned.count_down();
+    both_pinned.wait();
+
     timespec start_time, end_time;
-    while (!q.try_dequeue(start_time)){};
     
-    clock_gettime(CLOCK_MONOTONIC, &end_time);
-    int64_t latency = (end_time.tv_sec - start_time.tv_sec) * 1'000'000'000 
-        + (end_time.tv_nsec - start_time.tv_nsec);
+    for (size_t i = 0; i < kMeasurementsCount; ++i)
+    {
+        // ping
+        while (!q.try_dequeue(start_time)){};
+        clock_gettime(CLOCK_MONOTONIC, &end_time);
+        int64_t latency = (end_time.tv_sec - start_time.tv_sec) * 1'000'000'000 
+            + (end_time.tv_nsec - start_time.tv_nsec);
 
-    latencies.push_back(latency);
+        latencies.push_back(latency);
+
+        // pong
+        while (!ack_q.try_enqueue(start_time)){};
+    }
 }
 
-int main()
+int main(int argc, char* argv[])
 {
-    constexpr size_t measurementsCount = 100'000;
-    std::string description = "Measuring 1 push and 1 pop, two threads, no cpu pinning, measurements count: " + std::to_string(measurementsCount);
+    if (argc != 3)
+    {
+        std::cerr << "Usage: " << argv[0]
+                  << " <producer_cpu> <consumer_cpu>\n";
+        return EXIT_FAILURE;
+    }
+
+    int producer_cpu = std::stoi(argv[1]);
+    int consumer_cpu = std::stoi(argv[2]);
+
+    std::string description = "Measuring 1 push and 1 pop, two threads (ping-pong), with cpu pinning, no cpu isolation, measurements count: "
+        + std::to_string(kMeasurementsCount)
+        + "\nproducer_cpu: " + std::to_string(producer_cpu)
+        + ", consumer_cpu: " + std::to_string(consumer_cpu);
 
     TQueue q(1);
+    TQueue ack_q(1);
+
     std::vector<int64_t> latencies;
-    latencies.reserve(measurementsCount);
+    latencies.reserve(kMeasurementsCount);
 
-    for (size_t i = 0; i < measurementsCount; ++i)
-    {
-        std::thread t1(producer,  std::ref(q));
-        std::thread t2(consumer, std::ref(q), std::ref(latencies));
+    std::latch both_pinned(2);
 
-        t1.join();
-        t2.join();
-    }
+    std::thread t1(producer,  std::ref(q), std::ref(ack_q), std::ref(both_pinned), producer_cpu);
+    std::thread t2(consumer, std::ref(q), std::ref(ack_q), std::ref(latencies), std::ref(both_pinned), consumer_cpu);
+
+    t1.join();
+    t2.join();
 
     std::sort(latencies.begin(), latencies.end());
 

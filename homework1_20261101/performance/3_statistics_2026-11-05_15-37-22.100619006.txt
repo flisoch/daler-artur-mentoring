@@ -1,0 +1,12 @@
+Measuring 1 push and 1 pop, two threads (ping-pong), with cpu pinning, no cpu isolation, measurements count: 100000
+producer_cpu: 2, consumer_cpu: 8
+Percentiles: {
+    p50: 51,
+    p90: 64,
+    p95: 69,
+    p99: 78,
+    p99.9: 103,
+    p99.99: 825,
+    max: 7450,
+}
+
