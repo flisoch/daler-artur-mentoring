@@ -1,0 +1,1 @@
+- разобраться c memory_order. Пока путаюсь, когда acquire, а когда release

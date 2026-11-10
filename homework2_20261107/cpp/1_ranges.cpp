@@ -9,6 +9,9 @@
 если на каком-то этапе пишешь for, значит что-то делаешь не так. Везде использовать C++-ные средства.
 */
 
+// clang++ -std=c++23 -O3 1_ranges.cpp
+// ./a.out
+
 #include <algorithm>
 #include <iostream>
 #include <random>
