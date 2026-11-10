@@ -33,7 +33,6 @@
 template<typename T>
 using TMatrix = std::vector<T>;
 
-
 template<std::integral T>
 TMatrix<T> getMatrix(const size_t rowsCount, const size_t columnsCount)
 {
