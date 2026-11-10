@@ -14,7 +14,7 @@ erase(K) -> bool, size() -> int.
 #include <time.h>
 #include <unordered_map>
 #include <utility>
-
+#include <vector>
 
 // хеш таблица открытой адресацией фиксированной емкости, linear probing + backward shift deletion
 template<
@@ -193,84 +193,121 @@ void print_elapsed_time(timespec& start, timespec& end)
         << elapsed_ns / 1'000'000.0 << " ms)\n";
 }
 
+void clean_up_cache()
+{
+    // my L3 cache is 12 MiB, so I allocate 36 MiB of data and iterate through it
+    // int64_t = 8 bytes, 25 MiB = 36 * 1024 * 1024 bytes = ~ 4.5 million elements + 1 (LLM said to add +1)
+
+    std::vector<int64_t> garbage(36 * 1024 * 128 + 1, 0xDEADBEEF);
+
+    // L3 critical stride is 768 KB. If I hit only one cache set, It gives pollution to only 1 cache set. So I add +64 bytes to my Critical Stride
+    // (768 * 1024 + 64) / 8 = 98312
+    volatile int64_t sum = 0;
+    size_t current_index = 0;
+
+    for (size_t total_reads = 0; total_reads < garbage.size(); ++total_reads)
+    {
+        sum += garbage[current_index];
+        current_index = (current_index + 98312) % garbage.size();
+    }
+
+    asm volatile("": "+r" (sum));
+
+    /*
+    $ perf stat -e LLC-loads,LLC-load-misses,page-faults ./a.out
+
+    Performance counter stats for './a.out':
+
+         4,402,288      LLC-loads                                                             
+         3,771,147      LLC-load-misses        // ~85%                                    
+             9,355      page-faults            // 9216 pages need to allocate 36 MiB vector
+    */
+}
+
 int main()
 {
-    std::unordered_map<int, int> umap;
-    hash_table<int, int, 1'000'003> table;
+    clean_up_cache();
+    // std::unordered_map<int, int> umap;
+    // hash_table<int, int, 1'000'003> table;
 
-    auto load_capacity = 0.5 * table.capacity();
+    // auto load_capacity = 0.5 * table.capacity();
 
-    timespec start_time, end_time;
+    // timespec start_time, end_time;
 
-    std::cout << "Insert: \n";
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
+    // std::cout << "Insert: \n";
+    // clock_gettime(CLOCK_MONOTONIC, &start_time);
 
-    for (size_t i = 0; i < load_capacity; ++i)
-    {
-        table.insert(i * 2, i);
-    }
+    // for (size_t i = 0; i < load_capacity; ++i)
+    // {
+    //     table.insert(i * 2, i);
+    // }
 
-    clock_gettime(CLOCK_MONOTONIC, &end_time);
-    print_elapsed_time(start_time, end_time);
+    // clock_gettime(CLOCK_MONOTONIC, &end_time);
+    // print_elapsed_time(start_time, end_time);
+
+    // clean_up_cache();
     
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
-    for (size_t i = 0; i < load_capacity; ++i)
-    {
-        umap.emplace(i * 2, i);
-    }
-    clock_gettime(CLOCK_MONOTONIC, &end_time);
-    print_elapsed_time(start_time, end_time);
+    // clock_gettime(CLOCK_MONOTONIC, &start_time);
+    // for (size_t i = 0; i < load_capacity; ++i)
+    // {
+    //     umap.emplace(i * 2, i);
+    // }
+    // clock_gettime(CLOCK_MONOTONIC, &end_time);
+    // print_elapsed_time(start_time, end_time);
 
-    int64_t sum = 0;
+    // clean_up_cache();
 
-    std::cout << "Lookup: \n";
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
-    for (size_t i = 0; i < load_capacity; ++i)
-    {
-        auto& pair = table.lookup(i * 2);
+    // int64_t sum = 0;
 
-        sum += pair.second;
-    }
-    clock_gettime(CLOCK_MONOTONIC, &end_time);
-    print_elapsed_time(start_time, end_time);
+    // std::cout << "Lookup: \n";
+    // clock_gettime(CLOCK_MONOTONIC, &start_time);
+    // for (size_t i = 0; i < load_capacity; ++i)
+    // {
+    //     auto& pair = table.lookup(i * 2);
+
+    //     sum += pair.second;
+    // }
+    // clock_gettime(CLOCK_MONOTONIC, &end_time);
+    // print_elapsed_time(start_time, end_time);
     
-    std::cout << "Hash table sum: " << sum << '\n';
-    sum = 0;
+    // clean_up_cache();
+    // std::cout << "Hash table sum: " << sum << '\n';
+    // sum = 0;
 
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
-    for (size_t i = 0; i < load_capacity; ++i)
-    {
-        auto& elem = umap.at(i * 2);
+    // clock_gettime(CLOCK_MONOTONIC, &start_time);
+    // for (size_t i = 0; i < load_capacity; ++i)
+    // {
+    //     auto& elem = umap.at(i * 2);
 
-        sum += elem;
-    }
-    clock_gettime(CLOCK_MONOTONIC, &end_time);
-    print_elapsed_time(start_time, end_time);
-    std::cout << "Hash table sum: " << sum << '\n';
+    //     sum += elem;
+    // }
+    // clock_gettime(CLOCK_MONOTONIC, &end_time);
+    // print_elapsed_time(start_time, end_time);
+    // std::cout << "Hash table sum: " << sum << '\n';
 
-    std::cout << "Erase: \n";
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
-    for (size_t i = 0; i < load_capacity; ++i)
-    {
-        if (!table.erase(i * 2))
-        {
-            std::cout << "Couldn't erase key: " << i << "\n";
-        }
-    }
-    clock_gettime(CLOCK_MONOTONIC, &end_time);
-    print_elapsed_time(start_time, end_time);
+    // std::cout << "Erase: \n";
+    // clock_gettime(CLOCK_MONOTONIC, &start_time);
+    // for (size_t i = 0; i < load_capacity; ++i)
+    // {
+    //     if (!table.erase(i * 2))
+    //     {
+    //         std::cout << "Couldn't erase key: " << i << "\n";
+    //     }
+    // }
+    // clock_gettime(CLOCK_MONOTONIC, &end_time);
+    // print_elapsed_time(start_time, end_time);
 
 
-    clock_gettime(CLOCK_MONOTONIC, &start_time);
-    for (size_t i = 0; i < load_capacity; ++i)
-    {
-        if (!umap.erase(i * 2))
-        {
-            std::cout << "Couldn't erase key: " << i << "\n";
-        }
-    }
-    clock_gettime(CLOCK_MONOTONIC, &end_time);
-    print_elapsed_time(start_time, end_time);
+    // clock_gettime(CLOCK_MONOTONIC, &start_time);
+    // for (size_t i = 0; i < load_capacity; ++i)
+    // {
+    //     if (!umap.erase(i * 2))
+    //     {
+    //         std::cout << "Couldn't erase key: " << i << "\n";
+    //     }
+    // }
+    // clock_gettime(CLOCK_MONOTONIC, &end_time);
+    // print_elapsed_time(start_time, end_time);
 
     return 0;
 }
