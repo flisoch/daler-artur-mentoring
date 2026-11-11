@@ -1,71 +1,116 @@
-/* 
-4. https://www.youtube.com/watch?v=Lrjjqc1bRHo - пробежать взглядом, 
-нам отсюда нужны кэшсеты, N-way associativity, critical stride. 
+/*
+4. https://www.youtube.com/watch?v=Lrjjqc1bRHo
 
 Определить экспериментально critical stride своей машины.
 */
 
-// как я понимаю, critical stride - это шаг, при котором очередной адрес относится к одному и тому же cache set
-// получается, если у меня L1d cache = 48 KiB, 64 cache-set'ов, 12 кеш-линий по 64 байт на каждый кеш-сет, и каждая следующая кеш-линия относится к следующему cache-set'у,
-// то чтобы попасть тот же самый cache-set, нужно 64*64 байт = 4096 bytes = 4KiB
+// L1d = 48 KiB, 64 cache sets, 12-way, cache line = 64 bytes
+// Critical stride = 64 * 64 = 4096 bytes - экспериментально это проверим
 
-// как я понимаю, нужно экспериментально для разных stride проверить, при каком stride средняя задержка увеличивается
+// clang++ 3_critical_stride_detection.cpp -std=c++23 -O3
 
-#include <algorithm>
+/* Results:
+Worst strides:
+Mean latency: 2.94704 , Stride: 10240 bytes        <------- тут неожиданно затесался не кратный 4KiB
+Mean latency: 2.87998 , Stride: 12288 bytes
+Mean latency: 2.62591 , Stride: 4096 bytes.        <------- меньше 4KiB нет, значит это минимальный critical stride
+Mean latency: 2.21295 , Stride: 8192 bytes
+Mean latency: 1.31163 , Stride: 64 bytes
+Best strides:
+Mean latency: 1.14005 , Stride: 1920 bytes
+Mean latency: 1.14006 , Stride: 1984 bytes
+Mean latency: 1.14006 , Stride: 3584 bytes
+Mean latency: 1.14006 , Stride: 10368 bytes
+Mean latency: 1.14006 , Stride: 1792 bytes
+*/
+
+#include <cstddef>
+#include <cmath>
 #include <iostream>
-#include <random>
+#include <map>
 #include <ranges>
+#include <stdexcept>
 #include <vector>
 #include "../../utils/benchmarks_utils.hpp"
 
-template<std::integral T>
-void test(size_t stride_in_bytes, std::vector<T>& numbers)
+std::vector<size_t> make_pointer_chasing(
+    size_t stride_in_bytes,
+    size_t lines_per_cache_set = 12)
 {
-    // clean_up_cpu_cache();
+    constexpr size_t ELEMENT_SIZE = sizeof(size_t);
 
-    std::vector<int64_t> latencies;
-    latencies.reserve(numbers.size());
-    Timer timer;
+    const size_t stride_step = stride_in_bytes / ELEMENT_SIZE;
+    const size_t indexes_count = lines_per_cache_set + 4;
 
-    int64_t sum = 0;
-    const size_t stride_step = stride_in_bytes / sizeof(T);
-    size_t index = 0;
-    for (size_t i = 0; i < numbers.size(); ++i)
+    std::vector<size_t> indexes(indexes_count * stride_step + 1);
+
+    for (size_t i = 0; i < indexes_count - 1; ++i)
     {
-        timer.start();
-        for (size_t j = 0; j < 16; ++j)
-        {
-            sum += numbers[j * stride_step];
-        }
-        timer.end();
-
-        latencies.push_back(timer.elapsed_time());
+        indexes[i * stride_step] = (i + 1) * stride_step;
     }
-    std::cout << sum << "\n";
 
-    std::sort(latencies.begin(), latencies.end());
-    Percentiles p = get_percentiles(latencies);
-    std::cout << "Stride " << stride_in_bytes << " bytes: \n" << p << "\n";
+    // последний на первый смотрит
+    indexes[(indexes_count - 1) * stride_step] = 0;
+
+    return indexes;
 }
 
+void test(size_t stride_in_bytes, std::multimap<double, int64_t>& latencies_by_stride)
+{
+    constexpr size_t ITERATIONS = 10'000'000;
+
+    std::vector<size_t> numbers = make_pointer_chasing(stride_in_bytes);
+
+    Timer timer;
+    size_t index = 0;
+
+    // Прогрев
+    for (size_t i = 0; i < 100'000; ++i)
+    {
+        index = numbers[index];
+    }
+
+    timer.start();
+
+    for (size_t i = 0; i < ITERATIONS; ++i)
+    {
+        index = numbers[index];
+    }
+
+    timer.end();
+    asm volatile("" : : "r"(index) : "memory");
+    latencies_by_stride.emplace(static_cast<double>(timer.elapsed_time()) / ITERATIONS, stride_in_bytes);
+}
+
+void print_worst_strides(std::multimap<double, int64_t>& latencies_by_stride)
+{
+    std::cout << "Worst strides:\n";
+    for (const auto& [mean_latency, stride_in_bytes]: latencies_by_stride | std::views::reverse | std::views::take(5))
+    {
+        std::cout << "Mean latency: " << mean_latency << " , Stride: " << stride_in_bytes << " bytes\n";
+    }
+}
+
+void print_best_strides(std::multimap<double, int64_t>& latencies_by_stride)
+{
+    std::cout << "Best strides:\n";
+    for (const auto& [mean_latency, stride_in_bytes]: latencies_by_stride | std::views::take(5))
+    {
+        std::cout << "Mean latency: " << mean_latency << " , Stride: " << stride_in_bytes << " bytes\n";
+    }
+}
 
 int main()
 {
-    size_t L1d_CACHE_SIZE = 48 * 1024; // 48 KiB
-    size_t L1d_CACHE_SETS = 64;
-    std::vector<int64_t> numbers(L1d_CACHE_SIZE / sizeof(int64_t) * L1d_CACHE_SETS);
-    std::mt19937_64 mt(12345);
+    std::multimap<double, int64_t> latencies_by_stride;
 
-    std::ranges::generate(numbers.begin(), numbers.end(), mt);
-    test(64, numbers);
-    test(128, numbers);
-    test(2048, numbers);
+    for (int i = 64; i <= 12 * 1024; i += 64)
+    {
+        test(i, latencies_by_stride);
+    }
 
-    test(4096, numbers);
-    test(4097, numbers);
-    
-    test(8192, numbers);
-    test(9999, numbers);
+    print_worst_strides(latencies_by_stride);
+    print_best_strides(latencies_by_stride);
 
     return 0;
 }
