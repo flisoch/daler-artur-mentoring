@@ -9,8 +9,10 @@ erase(K) -> bool, size() -> int.
 (где-то по 1 операции, где-то рядами потому что операция стоит дешевле измерения) у тебя во многом есть ответ.
 */
 
+#include <algorithm>
 #include <bitset>
 #include <iostream>
+#include <random>
 #include <time.h>
 #include <unordered_map>
 #include <utility>
@@ -184,102 +186,123 @@ private:
     size_t size_{0};   
 };
 
-void print_elapsed_time(timespec& start, timespec& end)
-{
-    const int64_t elapsed_ns = (end.tv_sec - start.tv_sec) * 1'000'000'000LL +
-        (end.tv_nsec - start.tv_nsec);
-
-    std::cout << "Elapsed time: "
-        << elapsed_ns << " ns ("
-        << elapsed_ns / 1'000'000.0 << " ms)\n";
-}
-
-
-
 int main()
 {
     clean_up_cpu_cache();
-    // std::unordered_map<int, int> umap;
-    // hash_table<int, int, 1'000'003> table;
-
-    // auto load_capacity = 0.5 * table.capacity();
-
-    // timespec start_time, end_time;
-
-    // std::cout << "Insert: \n";
-    // clock_gettime(CLOCK_MONOTONIC, &start_time);
-
-    // for (size_t i = 0; i < load_capacity; ++i)
-    // {
-    //     table.insert(i * 2, i);
-    // }
-
-    // clock_gettime(CLOCK_MONOTONIC, &end_time);
-    // print_elapsed_time(start_time, end_time);
-
-    // clean_up_cache();
     
-    // clock_gettime(CLOCK_MONOTONIC, &start_time);
-    // for (size_t i = 0; i < load_capacity; ++i)
-    // {
-    //     umap.emplace(i * 2, i);
-    // }
-    // clock_gettime(CLOCK_MONOTONIC, &end_time);
-    // print_elapsed_time(start_time, end_time);
+    constexpr size_t N = 1'000'000;
+    std::vector<int64_t> latencies;
+    latencies.reserve(N);
+    std::mt19937_64 mt(12345);
 
-    // clean_up_cache();
+    Timer timer;
+    std::cout << "Timer latency:\n"; // 13-14 ns, max: 30'678 ns
+    for (size_t i = 0; i < N; ++i)
+    {
+         timer.start();
+         timer.end();
+         latencies.push_back(timer.elapsed_time());
+    }
+   
+    Percentiles percentiles = get_percentiles(latencies);
+    std::cout << percentiles << "\n";
 
-    // int64_t sum = 0;
+    std::unordered_map<int, int> umap;
+    umap.reserve(static_cast<size_t>(1.67 * N));
+    hash_table<int, int, static_cast<size_t>(1.67 * N)> table;
 
-    // std::cout << "Lookup: \n";
-    // clock_gettime(CLOCK_MONOTONIC, &start_time);
-    // for (size_t i = 0; i < load_capacity; ++i)
-    // {
-    //     auto& pair = table.lookup(i * 2);
-
-    //     sum += pair.second;
-    // }
-    // clock_gettime(CLOCK_MONOTONIC, &end_time);
-    // print_elapsed_time(start_time, end_time);
+    std::vector<int> keys(N);
+    std::ranges::generate(keys.begin(), keys.end(), [&mt](){return mt();});
     
-    // clean_up_cache();
-    // std::cout << "Hash table sum: " << sum << '\n';
-    // sum = 0;
+    std::vector<int> values(N);
+    std::ranges::generate(values.begin(), values.end(), [&mt](){return mt();});
 
-    // clock_gettime(CLOCK_MONOTONIC, &start_time);
-    // for (size_t i = 0; i < load_capacity; ++i)
-    // {
-    //     auto& elem = umap.at(i * 2);
+    std::cout << "Insert: \n";
+    timer.start();
 
-    //     sum += elem;
-    // }
-    // clock_gettime(CLOCK_MONOTONIC, &end_time);
-    // print_elapsed_time(start_time, end_time);
-    // std::cout << "Hash table sum: " << sum << '\n';
+    for (size_t i = 0; i < N; ++i)
+    {
+        table.insert(keys[i], values[i]);
+    }
+    timer.end();
 
-    // std::cout << "Erase: \n";
-    // clock_gettime(CLOCK_MONOTONIC, &start_time);
-    // for (size_t i = 0; i < load_capacity; ++i)
-    // {
-    //     if (!table.erase(i * 2))
-    //     {
-    //         std::cout << "Couldn't erase key: " << i << "\n";
-    //     }
-    // }
-    // clock_gettime(CLOCK_MONOTONIC, &end_time);
-    // print_elapsed_time(start_time, end_time);
+    std::cout << "hash_table mean time: "
+        << timer.elapsed_time() / N << " ns ("
+        << timer.elapsed_time() / N / 1'000'000.0 << " ms)\n";
+
+    clean_up_cpu_cache();
+    
+    timer.start();
+    for (size_t i = 0; i < N; ++i)
+    {
+        umap.emplace(keys[i], values[i]);
+    }
+    timer.end();
+    std::cout << "std::unordered_map mean time: "
+        << timer.elapsed_time() / N << " ns ("
+        << timer.elapsed_time() / N / 1'000'000.0 << " ms)\n";
+
+    clean_up_cpu_cache();
+
+    int64_t sum = 0;
+
+    std::cout << "\nLookup: \n";
+    timer.start();
+    for (size_t i = 0; i < N; ++i)
+    {
+        auto& pair = table.lookup(keys[i]);
+
+        sum += pair.second;
+    }
+    timer.end();
+
+    std::cout << "hash_table mean time: "
+        << timer.elapsed_time() / N << " ns ("
+        << timer.elapsed_time() / N / 1'000'000.0 << " ms)\n";
+
+    
+    clean_up_cpu_cache();
+    std::cout << "sum: " << sum << '\n';
+    sum = 0;
+
+    timer.start();
+    for (size_t i = 0; i < N; ++i)
+    {
+        auto& elem = umap.at(keys[i]);
+        sum += elem;
+    }
+    timer.end();
+
+    std::cout << "std::unordered_map mean time: "
+        << timer.elapsed_time() / N << " ns ("
+        << timer.elapsed_time() / N / 1'000'000.0 << " ms)\n";
+
+    std::cout << "sum: " << sum << '\n';
+
+    std::cout << "\nErase: \n";
+    
+    timer.start();
+    for (size_t i = 0; i < N; ++i)
+    {
+        table.erase(keys[i]);
+    }
+    timer.end();
+
+    std::cout << "hash_table mean time: "
+        << timer.elapsed_time() / N << " ns ("
+        << timer.elapsed_time() / N / 1'000'000.0 << " ms)\n";
 
 
-    // clock_gettime(CLOCK_MONOTONIC, &start_time);
-    // for (size_t i = 0; i < load_capacity; ++i)
-    // {
-    //     if (!umap.erase(i * 2))
-    //     {
-    //         std::cout << "Couldn't erase key: " << i << "\n";
-    //     }
-    // }
-    // clock_gettime(CLOCK_MONOTONIC, &end_time);
-    // print_elapsed_time(start_time, end_time);
+    timer.start();
+    for (size_t i = 0; i < N; ++i)
+    {
+        umap.erase(keys[i]);
+    }
+    timer.end();
+
+    std::cout << "std::unordered_map mean time: "
+        << timer.elapsed_time() / N << " ns ("
+        << timer.elapsed_time() / N / 1'000'000.0 << " ms)\n";
 
     return 0;
 }

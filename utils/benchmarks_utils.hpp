@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <ctime>
 #include <sched.h> 
 #include <stdexcept>
@@ -61,9 +62,10 @@ struct Percentiles
     }
 };
 
-template <typename T>
-Percentiles get_percentiles(std::vector<T>& latencies)
+Percentiles get_percentiles(std::vector<int64_t>& latencies)
 {
+    std::sort(latencies.begin(), latencies.end());
+    
     auto percentile = [&](double p) -> int64_t 
     {
         size_t index = std::ceil(p / 100.0 * latencies.size()) - 1;
