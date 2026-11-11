@@ -17,6 +17,9 @@ erase(K) -> bool, size() -> int.
 #include <unordered_map>
 #include <utility>
 #include <vector>
+#include <unordered_set>
+#include <limits>
+
 #include "../../utils/benchmarks_utils.hpp"
 
 // хеш таблица открытой адресацией фиксированной емкости, linear probing + backward shift deletion
@@ -186,36 +189,50 @@ private:
     size_t size_{0};   
 };
 
-int main()
+std::vector<int> generate_keys(const size_t N, std::mt19937_64& mt)
 {
-    clean_up_cpu_cache();
-    
-    constexpr size_t N = 1'000'000;
-    std::vector<int64_t> latencies;
-    latencies.reserve(N);
-    std::mt19937_64 mt(12345);
+    std::vector<int> keys;
+    keys.reserve(N);
 
-    Timer timer;
-    std::cout << "Timer latency:\n"; // 13-14 ns, max: 30'678 ns
-    for (size_t i = 0; i < N; ++i)
+    std::unordered_set<int> unique_keys;
+    unique_keys.reserve(N);
+
+    std::uniform_int_distribution<int> dist(
+        std::numeric_limits<int>::min(),
+        std::numeric_limits<int>::max()
+    );
+
+    while (keys.size() < N)
     {
-         timer.start();
-         timer.end();
-         latencies.push_back(timer.elapsed_time());
+        int key = dist(mt);
+
+        if (unique_keys.insert(key).second)
+        {
+            keys.push_back(key);
+        }
     }
-   
-    Percentiles percentiles = get_percentiles(latencies);
-    std::cout << percentiles << "\n";
+
+    return keys;
+}
+
+template<size_t LoadPercent>
+void run_tests(const std::vector<int>& keys,
+               const std::vector<int>& values)
+{
+    constexpr size_t N = 1'000'000;
+    constexpr size_t Capacity = (N * 100 + LoadPercent - 1) / LoadPercent;
 
     std::unordered_map<int, int> umap;
-    umap.reserve(static_cast<size_t>(1.67 * N));
-    hash_table<int, int, static_cast<size_t>(1.67 * N)> table;
+    umap.max_load_factor(1.0f);
+    umap.rehash(Capacity);
 
-    std::vector<int> keys(N);
-    std::ranges::generate(keys.begin(), keys.end(), [&mt](){return mt();});
-    
-    std::vector<int> values(N);
-    std::ranges::generate(values.begin(), values.end(), [&mt](){return mt();});
+    hash_table<int, int, Capacity> table;
+
+    Timer timer;
+
+    std::cout << "\nLoad factor: "
+        << static_cast<double>(N) / Capacity
+        << " (capacity = " << Capacity << ")\n";
 
     std::cout << "Insert: \n";
     timer.start();
@@ -304,5 +321,41 @@ int main()
         << timer.elapsed_time() / N << " ns ("
         << timer.elapsed_time() / N / 1'000'000.0 << " ms)\n";
 
+}
+int main()
+{
+    clean_up_cpu_cache();
+    
+    constexpr size_t N = 1'000'000;
+    std::vector<int64_t> latencies;
+    latencies.reserve(N);
+    std::mt19937_64 mt(12345);
+
+    Timer timer;
+    std::cout << "Timer latency:\n"; // 13-14 ns, max: 30'678 ns
+    for (size_t i = 0; i < N; ++i)
+    {
+         timer.start();
+         timer.end();
+         latencies.push_back(timer.elapsed_time());
+    }
+   
+    Percentiles percentiles = get_percentiles(latencies);
+    std::cout << percentiles << "\n";
+
+    std::vector<int> keys = generate_keys(N, mt);
+    std::vector<int> values(N);
+    std::ranges::generate(values.begin(), values.end(), [&mt](){return mt();});
+
+    run_tests<50>(keys, values);  // load factor
+    run_tests<60>(keys, values);
+    run_tests<70>(keys, values);
+    run_tests<80>(keys, values);
+    run_tests<85>(keys, values);
+    run_tests<90>(keys, values);
+    run_tests<95>(keys, values);
+    run_tests<98>(keys, values);
+    run_tests<100>(keys, values);
+    
     return 0;
 }
